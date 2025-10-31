@@ -16,7 +16,7 @@ git clone https://github.com/Pheonix0x01/blue-green.git
 cd blue-green
 cp .env.example .env
 chmod +x entrypoint.sh
-docker-compose up -d
+docker compose up -d
 ```
 
 test it works:
@@ -60,24 +60,24 @@ curl -X POST http://localhost:8081/chaos/stop
 edit `.env` and change `ACTIVE_POOL=blue` to `ACTIVE_POOL=green` then:
 
 ```bash
-docker-compose restart nginx
+docker compose restart nginx
 curl -i http://localhost:8080/version
 ```
 
 ## logs and debugging
 
 ```bash
-docker-compose logs -f
-docker-compose logs -f nginx
-docker-compose exec nginx cat /etc/nginx/conf.d/default.conf
-docker-compose exec nginx nginx -t
+docker compose logs -f
+docker compose logs -f nginx
+docker compose exec nginx cat /etc/nginx/conf.d/default.conf
+docker compose exec nginx nginx -t
 ```
 
 health checks:
 ```bash
 curl http://localhost:8081/healthz
 curl http://localhost:8082/healthz
-docker-compose ps
+docker compose ps
 ```
 
 ## how it works
@@ -89,6 +89,78 @@ timeouts are aggressive: 3s connection, 3s read, up to 3 retries within 9s total
 ## cleanup
 
 ```bash
-docker-compose down
-docker-compose down -v
+docker compose down
+docker compose down -v
+```
+
+## observability
+
+stage 3 adds slack alerts for failovers and high error rates. nginx logs pool and release info. python watcher parses logs and sends alerts.
+
+## slack setup
+
+you need a slack webhook. go to https://api.slack.com/apps and create an app. add incoming webhooks feature and create one for your channel. put the webhook url in `.env`.
+
+```bash
+cp .env.example .env
+nano .env
+docker compose up -d
+docker logs -f log_watcher
+```
+
+## test failover alert
+
+```bash
+curl -X POST "http://localhost:8081/chaos/start?mode=error"
+
+for i in {1..20}; do curl http://localhost:8080/version; sleep 0.5; done
+
+curl -X POST http://localhost:8081/chaos/stop
+```
+
+check slack for the failover alert.
+
+## test error rate alert
+
+```bash
+curl -X POST "http://localhost:8081/chaos/start?mode=error"
+for i in {1..250}; do curl http://localhost:8080/version; done
+curl -X POST http://localhost:8081/chaos/stop
+```
+
+check slack for the error rate alert.
+
+## checking logs
+
+nginx logs:
+```bash
+docker exec nginx_proxy tail -f /var/log/nginx/access.log
+```
+
+watcher output:
+```bash
+docker logs -f log_watcher
+```
+
+should see pool detection, failover messages, error rate calculations, and slack confirmations.
+
+## troubleshooting
+
+watcher not starting:
+```bash
+docker logs log_watcher
+```
+
+slack not working:
+```bash
+curl -X POST -H 'Content-type: application/json' \
+  --data '{"text":"Test"}' \
+  $SLACK_WEBHOOK_URL
+```
+
+no failover detected:
+```bash
+curl http://localhost:8081/chaos/status
+docker logs nginx_proxy
+docker exec nginx_proxy cat /etc/nginx/conf.d/default.conf
 ```
